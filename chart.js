@@ -1,4 +1,5 @@
 // Live candlestick chart drawn on a plain canvas. No libraries, no CDN.
+// Supports indicator layers: XChart.addLayer({ enabled, lines, draw, panelWidth }).
 (function () {
   const C = { bg: "#0e1116", grid: "#1e2530", text: "#8b949e", up: "#26a69a", down: "#ef5350", amber: "#f5b942", white: "#e6e8ea" };
   const TFS = ["1m", "5m", "15m", "1h", "4h"];
@@ -6,8 +7,8 @@
     XAUUSDT: "https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT",
     PAXGUSDT: "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT"
   };
-  const S = { tf: "5m", candles: [], levels: [], price: null, symbol: "XAUUSDT", offset: 0, vis: 80,
-              cross: null, err: false, loading: true, token: 0, sig: [] };
+  const S = { tf: "5m", candles: [], levels: [], sig: [], layers: [], price: null, symbol: "XAUUSDT", offset: 0, vis: 80,
+             cross: null, err: false, loading: true, token: 0, plotW: 300 };
   const wrap = document.getElementById("chartWrap");
   const cv = document.getElementById("chart");
   const ctx = cv.getContext("2d");
@@ -74,6 +75,7 @@
     S.offset = Math.min(Math.max(S.offset, 0), Math.max(0, n - 10));
   }
   function draw() { if (!raf) raf = requestAnimationFrame(render); }
+  const dashOf = (d) => (d === "dot" ? [2, 3] : d ? [6, 4] : []);
 
   function render() {
     raf = 0;
@@ -83,17 +85,24 @@
     const n = S.candles.length;
     if (!n) return;
     clampView();
-    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const act = S.layers.filter((L) => !L.enabled || L.enabled());
+    const panelW = Math.min(Math.floor(W * 0.55), act.reduce((a, L) => a + (L.panelWidth ? L.panelWidth(W) : 0), 0));
+    const pr = W - padR - panelW, plotW = pr - padL, plotH = H - padT - padB;
+    S.plotW = plotW;
     const end = n - S.offset, start = end - S.vis, cw = plotW / S.vis;
     const i0 = Math.max(0, Math.floor(start)), i1 = Math.min(n - 1, Math.ceil(end) - 1);
     let lo = Infinity, hi = -Infinity;
     for (let i = i0; i <= i1; i++) { lo = Math.min(lo, S.candles[i].l); hi = Math.max(hi, S.candles[i].h); }
     const ref = S.price || S.candles[n - 1].c;
-    const all = S.levels.concat(S.sig);
+    let layerLines = [];
+    for (const L of act) if (L.lines) layerLines = layerLines.concat(L.lines() || []);
+    const all = S.levels.concat(S.sig, layerLines);
     for (const L of all) if (Math.abs(L.price - ref) / ref <= 0.03) { lo = Math.min(lo, L.price); hi = Math.max(hi, L.price); }
     const pad = (hi - lo) * 0.05 || 1; lo -= pad; hi += pad;
     const y = (p) => padT + ((hi - p) / (hi - lo)) * plotH;
     const x = (i) => padL + (i - start + 0.5) * cw;
+    const cx = { ctx, W, H, padL, padT, padR, pr, plotW, plotH, lo, hi, y, x, start, end, cw, n, candles: S.candles, ref,
+                 panelX0: pr, panelX1: W - padR };
 
     ctx.font = "11px system-ui, sans-serif";
     const axisLabels = [];
@@ -106,26 +115,29 @@
     ctx.strokeStyle = C.grid; ctx.lineWidth = 1; ctx.setLineDash([]);
     for (let p = Math.ceil(lo / step) * step; p <= hi; p += step) {
       const yy = Math.round(y(p)) + 0.5;
-      ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(W - padR, yy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(pr, yy); ctx.stroke();
       axisLabels.push([p, yy]);
     }
+
+    // background layers (heatmap, zones)
+    for (const L of act) if (L.draw) { ctx.save(); L.draw(cx, "back"); ctx.restore(); }
 
     // candles
     const bw = Math.max(1, cw * 0.7);
     for (let i = i0; i <= i1; i++) {
-      const k = S.candles[i], up = k.c >= k.o, col = up ? C.up : C.down, cx = x(i);
-      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(cx, y(k.h)); ctx.lineTo(cx, y(k.l)); ctx.stroke();
+      const k = S.candles[i], up = k.c >= k.o, col = up ? C.up : C.down, cxx = x(i);
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(cxx, y(k.h)); ctx.lineTo(cxx, y(k.l)); ctx.stroke();
       const top = y(Math.max(k.o, k.c)), h = Math.max(1, Math.abs(y(k.o) - y(k.c)));
-      ctx.fillRect(cx - bw / 2, top, bw, h);
+      ctx.fillRect(cxx - bw / 2, top, bw, h);
     }
 
     // level lines
     const vis = all.filter((L) => L.price >= lo && L.price <= hi).sort((a, b) => b.price - a.price);
     for (const L of vis) {
-      ctx.strokeStyle = L.color; ctx.lineWidth = 1; ctx.setLineDash(L.dash === "dot" ? [2, 3] : L.dash ? [6, 4] : []);
+      ctx.strokeStyle = L.color; ctx.lineWidth = 1; ctx.setLineDash(dashOf(L.dash));
       const yy = Math.round(y(L.price)) + 0.5;
-      ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(W - padR, yy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(pr, yy); ctx.stroke();
     }
     ctx.setLineDash([]);
     const ly = vis.map((L) => y(L.price));
@@ -133,35 +145,49 @@
     ctx.textAlign = "right"; ctx.textBaseline = "middle";
     vis.forEach((L, k) => {
       const t = L.label + " " + fp(L.price), w = ctx.measureText(t).width + 8;
-      ctx.fillStyle = "rgba(14,17,22,0.85)"; ctx.fillRect(W - padR - 4 - w, ly[k] - 7, w, 14);
-      ctx.fillStyle = L.color; ctx.fillText(t, W - padR - 8, ly[k]);
+      ctx.fillStyle = "rgba(14,17,22,0.85)"; ctx.fillRect(pr - 4 - w, ly[k] - 7, w, 14);
+      ctx.fillStyle = L.color; ctx.fillText(t, pr - 8, ly[k]);
     });
 
     // current price line
     const py = Math.min(Math.max(y(ref), padT), padT + plotH);
     ctx.strokeStyle = C.white; ctx.setLineDash([2, 3]);
-    ctx.beginPath(); ctx.moveTo(padL, py); ctx.lineTo(W - padR, py); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(padL, py); ctx.lineTo(pr, py); ctx.stroke();
     ctx.setLineDash([]);
+
+    // foreground layers
+    for (const L of act) if (L.draw) { ctx.save(); L.draw(cx, "front"); ctx.restore(); }
 
     // crosshair lines
     let cinfo = null;
     if (S.cross) {
-      const cx = Math.min(Math.max(S.cross.x, padL), W - padR), cy = Math.min(Math.max(S.cross.y, padT), padT + plotH);
+      const cxx = Math.min(Math.max(S.cross.x, padL), pr), cy = Math.min(Math.max(S.cross.y, padT), padT + plotH);
       ctx.strokeStyle = C.text; ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, padT + plotH); ctx.moveTo(padL, cy); ctx.lineTo(W - padR, cy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cxx, padT); ctx.lineTo(cxx, padT + plotH); ctx.moveTo(padL, cy); ctx.lineTo(pr, cy); ctx.stroke();
       ctx.setLineDash([]);
-      const idx = Math.min(n - 1, Math.max(0, Math.floor(start + (cx - padL) / cw)));
-      cinfo = { cx, cy, p: hi - ((cy - padT) / plotH) * (hi - lo), k: S.candles[idx] };
+      const idx = Math.min(n - 1, Math.max(0, Math.floor(start + (cxx - padL) / cw)));
+      cinfo = { cx: cxx, cy, p: hi - ((cy - padT) / plotH) * (hi - lo), k: S.candles[idx] };
     }
     ctx.restore();
 
+    // side panel layers (options ladder)
+    for (const L of act) if (L.draw && panelW > 0) { ctx.save(); L.draw(cx, "panel"); ctx.restore(); }
+
     // price axis
+    ctx.font = "11px system-ui, sans-serif";
     ctx.fillStyle = C.text; ctx.textAlign = "left"; ctx.textBaseline = "middle";
     for (const [p, yy] of axisLabels) ctx.fillText(fp(p), W - padR + 6, yy);
     const tag = (txt, yy, bg, fg) => {
       ctx.fillStyle = bg; ctx.fillRect(W - padR + 1, yy - 8, padR - 2, 16);
       ctx.fillStyle = fg; ctx.textAlign = "left"; ctx.fillText(txt, W - padR + 5, yy);
     };
+    const used = [py];
+    for (const L of vis) {
+      if (!L.tag) continue;
+      const yy = y(L.price);
+      if (used.some((u) => Math.abs(u - yy) < 15)) continue;
+      used.push(yy); tag(fp(L.price), yy, L.color, C.bg);
+    }
     tag(fp(ref), py, C.white, C.bg);
 
     // time axis
@@ -170,7 +196,7 @@
     for (let i = Math.ceil(start); i < end; i++) {
       if (i < 0 || i >= n || i % every) continue;
       const xx = x(i);
-      if (xx > padL + 20 && xx < W - padR - 20) ctx.fillText(fmtAxis(S.candles[i].t), xx, H - padB / 2);
+      if (xx > padL + 20 && xx < pr - 20) ctx.fillText(fmtAxis(S.candles[i].t), xx, H - padB / 2);
     }
 
     if (cinfo) {
@@ -244,7 +270,7 @@
     if (Math.abs(dx) > 6 || Math.abs(p.y - drag.y) > 6) drag.moved = true;
     if (drag.moved) {
       clearTimeout(lp);
-      S.offset = drag.off + dx / ((W - padL - padR) / S.vis);
+      S.offset = drag.off + dx / (S.plotW / S.vis);
       if (e.pointerType === "mouse") S.cross = p;
       updateUI(); draw();
     }
@@ -265,9 +291,11 @@
   cv.addEventListener("touchmove", (e) => { if (crossMode) e.preventDefault(); }, { passive: false });
   cv.addEventListener("contextmenu", (e) => e.preventDefault());
 
-  // ---------- public API used by app.js ----------
+  // ---------- public API ----------
   window.XChart = {
     setPrice(p) { S.price = p; draw(); },
+    redraw() { draw(); },
+    addLayer(layer) { S.layers.push(layer); draw(); },
     setSignal(g) {
       S.sig = g ? [
         { label: "Entry", price: g.entry, color: C.white, dash: false },

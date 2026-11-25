@@ -77,3 +77,21 @@ h2{font-size:1rem;font-weight:600;margin:0 0 4px}
 #paneChart .chart-wrap{height:calc(100vh - 290px);height:calc(100dvh - 290px);min-height:360px}
 @media (min-width:900px){body.chart-tab main{max-width:1200px}#paneChart .chart-wrap{height:calc(100dvh - 260px);min-height:480px}}
 .chart-sig{margin:8px 0 0}
+
+.ind-panel{position:absolute;top:8px;left:8px;z-index:5;max-width:230px;background:rgba(22,27,34,.94);border:1px solid var(--line);border-radius:6px;font-size:.8rem}
+.ind-head{display:block;width:100%;text-align:left;background:none;border:0;color:var(--text);font:inherit;font-weight:600;padding:8px 10px;cursor:pointer}
+.ind-row{display:flex;align-items:center;gap:6px;padding:4px 8px}
+.ind-name{flex:1;color:var(--text)}
+.ind-tog,.ind-set{font:inherit;font-size:.75rem;padding:6px 10px;border-radius:5px;border:1px solid var(--line);background:var(--bg);color:var(--muted);cursor:pointer;min-width:42px}
+.ind-tog.on{color:var(--green);border-color:var(--green)}
+.ind-note{color:var(--muted);font-size:.72rem;padding:6px 10px;line-height:1.35}
+.ind-dialog{position:absolute;inset:0;z-index:8;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:10px}
+.dlg-box{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:100%;max-width:360px;max-height:92%;overflow:auto;padding:12px}
+.dlg-title{font-weight:700;margin-bottom:10px}
+.dlg-fields{display:flex;flex-direction:column;gap:10px}
+.dlg-f{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:.85rem;color:var(--text)}
+.dlg-f input[type=number],.dlg-f select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:9px;font:inherit;width:120px}
+.dlg-f input[type=checkbox]{width:22px;height:22px}
+.dlg-btns{display:flex;gap:8px;margin-top:12px}
+.dlg-btns button{flex:1;font:inherit;padding:11px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--text);cursor:pointer}
+.dlg-btns .primary{background:#3b82f6;border-color:#3b82f6;color:#fff;font-weight:600}

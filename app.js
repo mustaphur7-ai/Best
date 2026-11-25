@@ -19,6 +19,7 @@ async function loadLevels() {
     else b.hidden = true;
     if (window.XChart) XChart.setLevels(L);
     if (window.XAlerts) XAlerts.setLevels(L);
+    if (window.XInd) XInd.setLevels(L);
     render();
   } catch (e) {
     $("banner").hidden = false;
@@ -80,6 +81,7 @@ async function pollSpot() {
       $("price").textContent = fmt(spot);
       if (window.XChart) XChart.setPrice(spot);
       if (window.XAlerts) XAlerts.setPrice(spot);
+      if (window.XInd) XInd.setPrice(spot);
       $("dot").className = "dot ok";
       $("priceMeta").textContent = name + " " + new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Nairobi" });
       render();

@@ -7,7 +7,9 @@ import yfinance as yf
 RATE = 0.04
 MAX_DAYS = 30
 MIN_GAP = 0.0015
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "levels.json")
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, "levels.json")
+PREV = os.path.join(HERE, "data_prev.json")
 
 
 def retry(fn, tries=3, wait=5):
@@ -53,7 +55,7 @@ def load_chain():
             for r in df.itertuples():
                 oi, iv, bid, ask = r.openInterest, r.impliedVolatility, r.bid, r.ask
                 if oi > 0 and iv > 0.01 and bid > 0 and ask > 0:  # NaN fails these checks
-                    opts.append(dict(k=float(r.strike), kind=kind, oi=float(oi), iv=float(iv), T=T, days=days))
+                    opts.append(dict(k=float(r.strike), kind=kind, oi=float(oi), iv=float(iv), T=T, days=days, exp=exp))
     if not opts:
         raise RuntimeError("no usable options rows")
     return gld, opts
@@ -160,6 +162,65 @@ def main():
         return [dict(price=round(x["price"], 2), score=round(x["score"], 1),
                      open_interest=int(x["oi"]), gex=round(x["gex"])) for x in chosen]
 
+    # ---- per-expiry GEX and vega (front expiry, next expiry, all) for the indicators ----
+    days_set = sorted({o["days"] for o in opts})
+    front_days = days_set[0]
+    next_days = days_set[1] if len(days_set) > 1 else None
+    net = {"all": {}, "front": {}, "next": {}}
+    vegax = {"all": {}, "front": {}}
+    for o in opts:
+        dl, g, v = greeks(gld, o["k"], o["T"], o["iv"], o["kind"])
+        signed = g * o["oi"] * 100 * gld * gld * 0.01 * (1 if o["kind"] == "C" else -1)
+        grp = "front" if o["days"] == front_days else ("next" if o["days"] == next_days else None)
+        net["all"][o["k"]] = net["all"].get(o["k"], 0) + signed
+        vegax["all"][o["k"]] = vegax["all"].get(o["k"], 0) + v * o["oi"] * 100
+        if grp:
+            net[grp][o["k"]] = net[grp].get(o["k"], 0) + signed
+        if grp == "front":
+            vegax["front"][o["k"]] = vegax["front"].get(o["k"], 0) + v * o["oi"] * 100
+
+    def pt(d, k):
+        return None if k is None else dict(price=round(k * ratio, 2), value=round(d[k]))
+    def peak_k(d):
+        return max(d, key=lambda k: abs(d[k])) if d else None
+    def wall_k(d, above):
+        ks = [k for k in d if (k > gld if above else k < gld)]
+        return max(ks, key=lambda k: d[k]) if ks else None
+    def top(d, n):
+        return [dict(rank=i + 1, price=round(k * ratio, 2), net_gex=round(d[k]))
+                for i, k in enumerate(sorted(d, key=lambda k: -abs(d[k]))[:n])]
+
+    exp_of = lambda days: next((o["exp"] for o in opts if o["days"] == days), None)
+    nairobi_now = datetime.now(timezone.utc).astimezone(ZoneInfo("Africa/Nairobi"))
+    today = nairobi_now.date().isoformat()
+    try:
+        with open(PREV) as f:
+            prev = json.load(f)
+    except Exception:
+        prev = {}
+    base = prev.get("prev_net_all", {}) if prev.get("date") == today else prev.get("net_all", {})
+    snap_now = {"%.2f" % k: round(v) for k, v in net["all"].items()}
+    gex_strikes = []
+    for k in sorted(strikes):
+        if abs(k - gld) / gld > 0.08:
+            continue
+        key = "%.2f" % k
+        s = strikes[k]
+        gex_strikes.append(dict(
+            strike=round(k * ratio, 2), net_gex=round(net["all"].get(k, 0)),
+            front_gex=round(net["front"].get(k, 0)), next_gex=round(net["next"].get(k, 0)),
+            call_oi=int(s["call_oi"]), put_oi=int(s["put_oi"]),
+            vega_exposure=round(vegax["all"].get(k, 0)),
+            change_1d=(round(net["all"].get(k, 0) - base[key]) if key in base else None)))
+    extra = dict(
+        front_expiry=exp_of(front_days), next_expiry=exp_of(next_days) if next_days is not None else None,
+        gex_strikes=gex_strikes,
+        peak_gex=dict(front=pt(net["front"], peak_k(net["front"])), all=pt(net["all"], peak_k(net["all"]))),
+        iv_wall_above=dict(front=pt(vegax["front"], wall_k(vegax["front"], True)), all=pt(vegax["all"], wall_k(vegax["all"], True))),
+        iv_wall_below=dict(front=pt(vegax["front"], wall_k(vegax["front"], False)), all=pt(vegax["all"], wall_k(vegax["all"], False))),
+        top_front=top(net["front"], 10), top_next=top(net["next"], 5), top_all=top(net["all"], 10),
+        sources=["GLD options chain via yfinance (delayed)", "OI-based dealer sign"])
+
     top = sorted(strikes.items(), key=lambda kv: -abs(kv[1]["call_gex"] + kv[1]["put_gex"]))[:10]
     now = datetime.now(timezone.utc)
     out = dict(
@@ -173,10 +234,15 @@ def main():
         top_gex_strikes=[dict(price=round(k * ratio, 2), net_gex=round(s["call_gex"] + s["put_gex"]),
                               call_oi=int(s["call_oi"]), put_oi=int(s["put_oi"])) for k, s in top],
     )
+    out.update(extra)
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:
         json.dump(out, f, indent=2)
     os.replace(tmp, OUT)  # only reached on success, so old levels survive a failed run
+    tmp2 = PREV + ".tmp"
+    with open(tmp2, "w") as f:
+        json.dump(dict(date=today, net_all=snap_now, prev_net_all=base), f)
+    os.replace(tmp2, PREV)
     print("levels written", out["analyzed_at"])
 
 

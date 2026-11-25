@@ -11,7 +11,7 @@
   if (!set.levels) set.levels = {};
   const save = () => lsSet("xl_set", set);
 
-  let L = null, levels = [], price = null, armed = false, ringing = false;
+  let L = null, levels = [], extras = [], price = null, armed = false, ringing = false;
   const lvSt = {};
   const st = (id) => lvSt[id] || (lvSt[id] = { cool: false, snooze: 0 });
   let sig = lsGet("xl_sig", null);
@@ -154,10 +154,11 @@
     const fresh = last1m ? m1.filter((c) => c.t >= last1m) : m1.slice(-2);
     last1m = m1[m1.length - 1].t;
     const p = price || m1[m1.length - 1].c, b = set.band / 100, now = Date.now();
-    for (const lv of levels) {
+    for (const lv of levels.concat(extras)) {
       const s = st(lv.id);
       if (s.cool && Math.abs(p - lv.price) / lv.price >= 0.003) s.cool = false;
-      if (s.cool || !armed || set.levels[lv.id] === false || now < s.snooze) continue;
+      const off = lv.optIn ? set.levels[lv.id] !== true : set.levels[lv.id] === false;
+      if (s.cool || !armed || off || now < s.snooze) continue;
       const zlo = lv.price * (1 - b), zhi = lv.price * (1 + b);
       if (fresh.some((c) => c.h >= zlo && c.l <= zhi)) {
         s.cool = true;
@@ -292,9 +293,9 @@
 
   function buildChecks() {
     const box = $("levelChecks"); box.innerHTML = "";
-    levels.forEach((lv) => {
+    levels.concat(extras).forEach((lv) => {
       const lab = document.createElement("label"), cb = document.createElement("input");
-      cb.type = "checkbox"; cb.checked = set.levels[lv.id] !== false;
+      cb.type = "checkbox"; cb.checked = lv.optIn ? set.levels[lv.id] === true : set.levels[lv.id] !== false;
       cb.addEventListener("change", () => { set.levels[lv.id] = cb.checked; save(); });
       lab.append(cb, " " + lv.label + " " + fp(lv.price)); box.appendChild(lab);
     });
@@ -313,6 +314,7 @@
 
   window.XAlerts = {
     setPrice(p) { price = p; render(); },
+    setExtra(list) { extras = list.map((o) => Object.assign({}, o, { optIn: true })); buildChecks(); },
     setLevels(data) {
       const first = !levels.length;
       L = data; levels = [];
